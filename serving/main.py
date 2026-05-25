@@ -5,6 +5,7 @@ import csv
 import json
 import logging
 import os
+import sys
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -24,6 +25,9 @@ logger = logging.getLogger(__name__)
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
 ARTIFACTS_DIR = ROOT_DIR / "new" / "embeddings"
 DEFAULT_INDEX_PATH = ARTIFACTS_DIR / "world-subcountries-tagged.index"
 DEFAULT_EMBEDDINGS_PATH = ARTIFACTS_DIR / "world-subcountries-tagged-embeddings.npy"
@@ -845,6 +849,56 @@ def _run_weather_search(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _call_scraper_method(scraper: Any, method_names: List[str], *args: Any, **kwargs: Any) -> Any:
+    for method_name in method_names:
+        method = getattr(scraper, method_name, None)
+        if callable(method):
+            return method(*args, **kwargs)
+    raise AttributeError(f"{scraper.__class__.__name__} does not provide any of {method_names}")
+
+
+def _load_scraper_cookies(scraper: Any, cookies_file: str) -> bool:
+    if not cookies_file:
+        return False
+    for method_name in ("load_cookies", "_load_cookies"):
+        method = getattr(scraper, method_name, None)
+        if callable(method):
+            try:
+                return bool(method(cookies_file))
+            except Exception:
+                return False
+    return False
+
+
+def _normalize_browser_hotels(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    normalized: List[Dict[str, Any]] = []
+    for row in rows:
+        rating_raw = row.get("review_score")
+        rating_value = None
+        if rating_raw not in (None, "", "N/A"):
+            try:
+                rating_value = parse_float(rating_raw, 0.0)
+            except Exception:
+                rating_value = None
+        normalized.append(
+            {
+                "name": row.get("title", "N/A"),
+                "url": row.get("url", "N/A"),
+                "location": row.get("location", "N/A"),
+                "description": row.get("description", "N/A"),
+                "rating": rating_value,
+                "rating_label": row.get("review_label", "N/A"),
+                "review_count": row.get("review_count", "N/A"),
+                "price_per_night": row.get("price", "N/A"),
+                "currency": "N/A",
+                "availability": row.get("availability", "N/A"),
+                "image_alt": "N/A",
+                "image_url": "N/A",
+            }
+        )
+    return normalized
+
+
 def _run_hotels_search(payload: Dict[str, Any]) -> Dict[str, Any]:
     try:
         from booking.booking_hotels import (
@@ -885,6 +939,67 @@ def _run_hotels_search(payload: Dict[str, Any]) -> Dict[str, Any]:
     content_timeout = int(payload.get("content_timeout", 35))
     profile_dir = payload.get("profile_dir")
     profile_name = str(payload.get("profile_name", "Default"))
+    use_browser = bool(payload.get("use_browser", True))
+
+    if use_browser:
+        try:
+            from booking.booking_hotels import build_search_url, default_dates
+            from booking.booking_hotels_scraper import BookingHotelsScraper
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Hotels Selenium module import failed: {exc}") from exc
+
+        if checkin and not checkout:
+            try:
+                checkout_dt = datetime.strptime(str(checkin), "%Y-%m-%d")
+                checkout = (checkout_dt + timedelta(days=max(1, days))).date().isoformat()
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail="checkin must be YYYY-MM-DD when checkout is omitted.") from exc
+        elif not checkin and not checkout:
+            checkin, checkout = default_dates()
+        elif not (checkin and checkout):
+            raise HTTPException(status_code=400, detail="Provide both checkin and checkout, or neither.")
+
+        scraper = BookingHotelsScraper(headless=headless)
+        try:
+            _load_scraper_cookies(scraper, cookies_file or "")
+            if not scraper.search_hotels(
+                city=city,
+                country=country,
+                checkin=str(checkin),
+                checkout=str(checkout),
+                adults=adults,
+                children=int(payload.get("children", 0)),
+                rooms=rooms,
+                pets=bool(payload.get("pets", False)),
+            ):
+                raise HTTPException(status_code=502, detail="Booking hotels search failed.")
+            hotel_rows = scraper.scrape_hotels()[:limit]
+            return {
+                "query": {
+                    "city": city,
+                    "country": country,
+                    "checkin": str(checkin),
+                    "checkout": str(checkout),
+                    "adults": adults,
+                    "rooms": rooms,
+                    "constraints": {
+                        "min_rating": min_rating,
+                        "max_price": max_price,
+                    },
+                },
+                "search_url": build_search_url(
+                    city=city,
+                    country=country,
+                    checkin=str(checkin),
+                    checkout=str(checkout),
+                    adults=adults,
+                    rooms=rooms,
+                ),
+                "total_found": len(hotel_rows),
+                "hotels": _normalize_browser_hotels(hotel_rows),
+            }
+        finally:
+            scraper.close()
 
     cookie_records = _load_cookie_records(cookies_file or "")
     cookie_header = _cookie_header(cookie_records)
@@ -983,13 +1098,12 @@ def _run_attractions_search(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     scraper = BookingAttractionsScraper(headless=headless)
     try:
-        if not scraper._load_cookies(cookies_file):
-            pass
-        if not scraper.search_attractions(city, country, date_value):
+        _load_scraper_cookies(scraper, cookies_file)
+        if not _call_scraper_method(scraper, ["search_attractions", "search"], city, country, date_value):
             raise HTTPException(status_code=502, detail="Booking attractions search failed.")
-        attractions = scraper.scrape_attractions()
+        attractions = _call_scraper_method(scraper, ["scrape_attractions", "scrape"])
         if output:
-            scraper.save_to_csv(attractions, output)
+            _call_scraper_method(scraper, ["save_to_csv", "save_csv"], attractions, output)
         return {
             "query": {
                 "city": city,
@@ -1388,13 +1502,12 @@ async def booking_attractions(request: Request) -> Dict[str, Any]:
 
     scraper = BookingAttractionsScraper(headless=headless)
     try:
-        if not scraper._load_cookies(cookies_file):
-            pass
-        if not scraper.search_attractions(city, country, date_value):
+        _load_scraper_cookies(scraper, cookies_file)
+        if not _call_scraper_method(scraper, ["search_attractions", "search"], city, country, date_value):
             raise HTTPException(status_code=502, detail="Booking attractions search failed.")
-        attractions = scraper.scrape_attractions()
+        attractions = _call_scraper_method(scraper, ["scrape_attractions", "scrape"])
         if output:
-            scraper.save_to_csv(attractions, output)
+            _call_scraper_method(scraper, ["save_to_csv", "save_csv"], attractions, output)
         return {
             "query": {
                 "city": city,
@@ -1505,9 +1618,9 @@ def booking_search_status(job_id: str) -> Dict[str, Any]:
 
 if __name__ == "__main__":
     uvicorn.run(
-        app,
+        "main:app",
         host=os.getenv("HOST", "127.0.0.1"),
         port=int(os.getenv("PORT", "8000")),
-        reload=False,
+        reload=True,
     )
 
