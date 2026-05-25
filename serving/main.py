@@ -5,6 +5,7 @@ import csv
 import json
 import logging
 import os
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Sequence, Tuple
@@ -14,6 +15,7 @@ import uuid
 
 import numpy as np
 import requests
+import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -703,7 +705,37 @@ def _serialize_request_payload(payload: Any) -> Tuple[List[Dict[str, float]], Di
     return tags, options
 
 
-app = FastAPI(title="City Serving API", version="1.0.0")
+def _build_matcher() -> CityMatcher:
+    return CityMatcher(
+        index_path=Path(os.getenv("CITY_INDEX_PATH", str(DEFAULT_INDEX_PATH))),
+        embeddings_path=Path(os.getenv("CITY_EMBEDDINGS_PATH", str(DEFAULT_EMBEDDINGS_PATH))),
+        city_metadata_path=Path(os.getenv("CITY_METADATA_PATH", str(DEFAULT_CITY_METADATA_PATH))),
+        city_description_metadata_path=Path(
+            os.getenv("CITY_DESCRIPTION_METADATA_PATH", str(DEFAULT_CITY_DESCRIPTION_METADATA_PATH))
+        ),
+        deepseek_tags_csv=Path(os.getenv("DEEPSEEK_TAGS_CSV_PATH", str(DEFAULT_DEEPSEEK_TAGS_CSV))),
+        filtered_cities_descriptions_csv=Path(
+            os.getenv("FILTERED_CITIES_DESCRIPTIONS_CSV_PATH", str(DEFAULT_FILTERED_CITIES_DESCRIPTIONS_CSV))
+        ),
+        wikivoyage_preprocessed_csv=Path(
+            os.getenv("WIKIVOYAGE_PREPROCESSED_CSV_PATH", str(DEFAULT_WIKIVOYAGE_PREPROCESSED_CSV))
+        ),
+        poi_index_path=Path(os.getenv("POI_INDEX_PATH", str(DEFAULT_POI_INDEX_PATH))),
+        poi_metadata_path=Path(os.getenv("POI_METADATA_PATH", str(DEFAULT_POI_METADATA_PATH))),
+        poi_texts_path=Path(os.getenv("POI_TEXTS_PATH", str(DEFAULT_POI_TEXTS_PATH))),
+        embed_url=EMBED_URL,
+        embed_model=EMBED_MODEL,
+    )
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global matcher
+    matcher = _build_matcher()
+    yield
+
+
+app = FastAPI(title="City Serving API", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -1069,29 +1101,6 @@ def _process_booking_search_job(job_id: str) -> None:
         _save_job_record(job)
 
 
-@app.on_event("startup")
-def startup_event() -> None:
-    global matcher
-    matcher = CityMatcher(
-        index_path=Path(os.getenv("CITY_INDEX_PATH", str(DEFAULT_INDEX_PATH))),
-        embeddings_path=Path(os.getenv("CITY_EMBEDDINGS_PATH", str(DEFAULT_EMBEDDINGS_PATH))),
-        city_metadata_path=Path(os.getenv("CITY_METADATA_PATH", str(DEFAULT_CITY_METADATA_PATH))),
-        city_description_metadata_path=Path(
-            os.getenv("CITY_DESCRIPTION_METADATA_PATH", str(DEFAULT_CITY_DESCRIPTION_METADATA_PATH))
-        ),
-        deepseek_tags_csv=Path(os.getenv("DEEPSEEK_TAGS_CSV_PATH", str(DEFAULT_DEEPSEEK_TAGS_CSV))),
-        filtered_cities_descriptions_csv=Path(
-            os.getenv("FILTERED_CITIES_DESCRIPTIONS_CSV_PATH", str(DEFAULT_FILTERED_CITIES_DESCRIPTIONS_CSV))
-        ),
-        wikivoyage_preprocessed_csv=Path(
-            os.getenv("WIKIVOYAGE_PREPROCESSED_CSV_PATH", str(DEFAULT_WIKIVOYAGE_PREPROCESSED_CSV))
-        ),
-        poi_index_path=Path(os.getenv("POI_INDEX_PATH", str(DEFAULT_POI_INDEX_PATH))),
-        poi_metadata_path=Path(os.getenv("POI_METADATA_PATH", str(DEFAULT_POI_METADATA_PATH))),
-        poi_texts_path=Path(os.getenv("POI_TEXTS_PATH", str(DEFAULT_POI_TEXTS_PATH))),
-        embed_url=EMBED_URL,
-        embed_model=EMBED_MODEL,
-    )
 
 
 @app.get("/")
@@ -1490,3 +1499,15 @@ def booking_search_status(job_id: str) -> Dict[str, Any]:
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found.")
     return job
+
+
+
+
+if __name__ == "__main__":
+    uvicorn.run(
+        app,
+        host=os.getenv("HOST", "127.0.0.1"),
+        port=int(os.getenv("PORT", "8000")),
+        reload=False,
+    )
+

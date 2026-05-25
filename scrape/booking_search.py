@@ -60,7 +60,7 @@ def parse_proxy(proxy_str: str):
         return None
 
 
-def do_search_selenium(base_search_url: str, ss: str, proxy: str = None, headless: bool = True):
+def do_search_selenium(base_search_url: str, ss: str, proxy: str = None, headless: bool = False):
     seleniumwire_options = parse_proxy(proxy)
     if seleniumwire_options:
         # show only host:port to avoid printing credentials
@@ -152,7 +152,7 @@ def main():
     parser.add_argument('--ss', help='Search string (e.g. "Berlin, Germany")')
     parser.add_argument('--random', action='store_true', help='Pick a random location')
     parser.add_argument('--proxy', help='Proxy host:port or host:port:user:pass', default='31.59.20.176:6754')
-    parser.add_argument('--no-headless', action='store_true', help='Run browser visible')
+    parser.add_argument('--headless', action='store_true', help='Run browser in headless mode')
     args = parser.parse_args()
 
     samples = [
@@ -167,7 +167,7 @@ def main():
     else:
         ss = 'Hammamet, Tunisia'
 
-    do_search_selenium(BASE_SEARCH_URL, ss, proxy=args.proxy, headless=not args.no_headless)
+    do_search_selenium(BASE_SEARCH_URL, ss, proxy=args.proxy, headless=args.headless)
 
 
 if __name__ == '__main__':
