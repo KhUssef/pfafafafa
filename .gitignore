@@ -1,0 +1,64 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Notebook artifacts
+.ipynb_checkpoints/
+*.ipynb
+
+# IDE and editor state
+.vscode/
+.idea/
+
+# Generated data and model artifacts
+*.csv
+*.json
+*.html
+*.npy
+*.npz
+*.index
+*.gguf
+*.parquet
+*.feather
+*.pkl
+*.joblib
+*.log
+*.db
+*.sqlite
+*.dat.txt
+Webshare *.txt
+
+# Installer and archive files
+*.exe
+*.msi
+*.zip
+*.7z
+*.rar
+*.tar
+*.gz
+*.bz2
+*.xz
+*.tgz
+*.txz
+
+# Build and packaging outputs
+build/
+dist/
+*.egg-info/
+
+# Generated folders in this repo
+archive/
+fix_description_separator/output/
+serving/jobs/
+new/embeddings/

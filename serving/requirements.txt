@@ -1,0 +1,7 @@
+fastapi>=0.110
+uvicorn>=0.29
+numpy>=1.26
+requests>=2.31
+
+# Optional: install this only if you want FAISS-backed search on a platform that supports it.
+# faiss-cpu
